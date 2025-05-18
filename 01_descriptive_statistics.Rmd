@@ -1,0 +1,151 @@
+---
+title: "Clinical Descriptive Analysis"
+author: "Jorge"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+### Install required packages
+```{r install-packages, eval=FALSE}
+# Run this chunk once to install any missing packages
+required_pkgs <- c("tableone", "dplyr", "readxl", "openxlsx")
+new_pkgs <- required_pkgs[!(required_pkgs %in% installed.packages()[,"Package"])]
+if (length(new_pkgs)) install.packages(new_pkgs)
+```
+
+
+### Load libraries
+```{r load-libraries}
+library(tableone)
+library(dplyr)
+library(readxl)
+library(openxlsx)
+```
+
+
+### Import clinical dataset (baseline visit only)
+```{r import-data}
+clinical_df <- read_excel("BBDD.xlsx", sheet = "LC-MS+") |>
+  filter(Visita == 0) # keep baseline visit only
+```
+
+
+### Convert selected variables to factors
+```{r convert-factors}
+factor_vars <- c(
+  "Gender_male", "Smoker", "Alcohol_intake_50 gday", "IVDU",
+  "Ascites", "Bleeding_esophageal_varices", "Hepatic_encephalopathy",
+  "HCV_genotype", "HCV_RNA_850000_IU_mL", "Previous_AIDS",
+  "Nadir_CD4+_T_cells_200_cellsmm3", "Baseline_CD4+_T_cells<_500_cells_mm3",
+  "Tto_HIV"
+)
+
+clinical_df <- clinical_df |>
+  mutate(across(all_of(factor_vars), as.factor))
+```
+
+
+### Define variables for the descriptive analysis
+```{r define-vars}
+analysis_vars <- c(
+  "Age_years", 
+  "Gender_male", 
+  "BMI",
+  "Smoker", 
+  "Alcohol_intake_50 gday", 
+  "IVDU",
+  "Ascites",
+  "Bleeding_esophageal_varices",
+  "Hepatic_encephalopathy", 
+  "HCV_genotype", 
+  "Log10_HCV_RNA_IU/mL", 
+  "HCV_RNA_850000_IU_mL", 
+  "Previous_AIDS", 
+  "Nadir_CD4+_T_cells", 
+  "Nadir_CD4+_T_cells_200_cellsmm3", 
+  "Baseline_CD4+_T_cells", 
+  "Baseline_CD4+_T_cells<_500_cells_mm3", 
+  "Tto_HIV", 
+  "LSM",
+  "HSI",
+  "TyG",
+  "TGHDL",
+  "Glucosa",
+  "Trigliceridos",
+  "Colesterol_total",
+  "LDL",
+  "HDL",
+  "APRI"
+)
+
+categorical_vars <- factor_vars
+numeric_vars     <- setdiff(analysis_vars, categorical_vars)
+```
+
+
+### Specify grouping variable
+```{r group-var}
+group_var <- "Gender_male"   # sex at birth
+```
+
+
+### Create Table 1 (baseline characteristics)
+```{r table-one}
+# Build the descriptive table
+Table1 <- CreateTableOne(
+  vars         = analysis_vars,
+  data         = clinical_df,
+  factorVars   = categorical_vars,
+  strata       = group_var,
+  includeNA    = FALSE,
+  addOverall   = TRUE,
+  smd          = TRUE,
+  test         = TRUE,
+  testNonNormal = wilcox.test,          # Mann–Whitney U when two groups
+  argsNonNormal = list(NULL),
+  testApprox    = chisq.test,           # Chi‑square (with Yates correction)
+  argsApprox    = list(correct = TRUE),
+  testExact     = fisher.test           # Fisher’s exact when expected < 5
+)
+
+# Convert to matrix / data frame for further use
+Table1_df <- print(
+  Table1,
+  nonnormal      = TRUE,   # medians [IQR] for continuous vars
+  explain        = TRUE,   # add variable labels
+  test           = TRUE,   # show p‑values
+  missing        = TRUE,   # show % missing
+  showAllLevels  = TRUE,   # show each factor level
+  dropEqual      = FALSE   # keep variables with identical stats
+)
+
+View(Table1_df)
+
+# Display nicely in the knitted document
+knitr::kable(Table1_df, caption = "Baseline characteristics by sex (Table 1)")
+```
+
+
+### Missing‑data count for the first 42 variables
+```{r missing-data-count}
+missing_count <- colSums(!is.na(clinical_df[ , 1:41]))
+missing_df    <- data.frame(
+  Variable            = names(missing_count),
+  Patients_with_data  = missing_count,
+  row.names           = NULL
+)
+print(missing_df)
+```
+
+
+### Export Table 1 to Excel
+```{r export-table, eval=FALSE}
+# Convert the character matrix to a data frame so openxlsx can write it cleanly
+Table1_df <- as.data.frame(Table1_df, stringsAsFactors = FALSE)
+
+write.csv(
+  x         = Table1_df,
+  file      = "Table1_Descriptive.csv",
+)
+```

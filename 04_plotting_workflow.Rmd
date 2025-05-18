@@ -1,0 +1,209 @@
+---
+title: "Plotting Workflow for Lipidomics"
+author: "Jorge"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+### Install required packages
+```{r install-packages, eval=FALSE}
+# Run this chunk once to install any missing packages
+required_pkgs <- c("readxl", "openxlsx",
+                   "dplyr", "ggplot2", "patchwork")
+new_pkgs <- required_pkgs[!(required_pkgs %in% installed.packages()[,"Package"])]
+if (length(new_pkgs)) install.packages(new_pkgs)
+```
+
+
+### Load libraries
+```{r load-libraries, message=FALSE, warning=FALSE}
+library(readxl)
+library(openxlsx)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+```
+
+
+### Read GLMM results from Excel for LC-MS+ and LC-MS- and combine into a single data frame
+```{r load-results, message=FALSE, warning=FALSE}
+data_pos <- read_excel("Metabolite_GLMM_Results.xlsx", sheet = "lc+") %>% select(1:6) #all 1:6 men 8:13 women 15:20
+data_neg <- read_excel("Metabolite_GLMM_Results.xlsx", sheet = "lc-") %>% select(1:6) #all 1:6 men 8:13 women 15:20
+
+data <- bind_rows(data_pos, data_neg) %>%
+  filter(
+    pval < 0.05,
+    qval < 0.2
+  )
+```
+
+
+### Annotate lipid subclass and superclass
+```{r annotate-lipid-classes}
+# Extract subclass from feature name (substring before underscore)
+data$subclass <- sub("_.*", "", data$features)
+
+# Map subclass codes to broader superclasses
+data <- data %>%
+  mutate(
+    superclass = case_when(
+      # 1. Glycerophospholipids [GP]
+      subclass %in% c("PC", "PA", "PS", "PE", "PG", 
+                      "PI", "LPC", "LPA", "LPS", "LPE", 
+                      "LPG", "LPI", "PIP", "CL", "BMP", 
+                      "PEth", "PT") ~ "GP",
+
+      # 2. Glycerolipids [GL] 
+      subclass %in% c("TG", "DG", "MG", "LTG", "LDG", 
+                      "LMG", "MGDG", "DGDG", "SQDG", "DGTA",
+                      "DGTS", "DGCC") ~ "GL",
+
+      # 3. Fatty Acyls
+      subclass %in% c("FA", "CAR", "CoA", "NAE", "NAT") ~ "Fatty Acyls",
+
+      # 4. Sphingolipids [SP] 
+      subclass %in% c("SPB", "SPBP", "Cer", "ACer", "CerP", 
+                      "IPC", "CerPE", "SM", "HexCer", 
+                      "MIPC", "MIP2C", "Hex2Cer", "SHexCer", 
+                      "GSL-var") ~ "SP",
+
+      # Anything else → NA
+      TRUE ~ NA_character_
+    )
+  )
+```
+
+
+### Donut chart of superclass distribution
+```{r donut-char}
+# Define custom colors for lipid categories
+color_map <- c(
+  GP           = "#F0C77B",   
+  GL           = "#0072B2",   
+  `Fatty Acyls`= "#D55E00",
+  SP           = "#009E73"    
+)
+
+# Summarize counts and percentages by superclass
+df_superclass <- data %>%
+  filter(!is.na(superclass)) %>%
+  count(superclass, name = "n") %>%
+  mutate(
+    freq              = 100 * n / sum(n),
+    superclass_label  = paste0(superclass, " (", round(freq, 1), "%)")
+  )
+
+# Create donut chart
+ggplot(df_superclass, aes(x = 2, y = freq, fill = superclass)) +
+  geom_col(color = "black", width = 1) +
+  coord_polar(theta = "y", start = 0) +
+  xlim(0.5, 2.5) +
+  theme_void() +
+  scale_fill_manual(
+    values = color_map,                             
+    breaks = df_superclass$superclass,              
+    labels = df_superclass$superclass_label         
+  ) +
+  ggtitle("Differential lipids at 1-year") +
+  theme(
+    plot.title  = element_text(hjust = 0.5, size = 38),
+    legend.title = element_blank(),
+    legend.text  = element_text(size = 16, hjust = 0)
+  )
+
+# Save the figure
+ggsave("lipids_1year_donut.jpg", width = 14, height = 6, dpi = 300)
+```
+
+
+### Lipid Subclass Up/Down Regulation Stacked Bar Panels
+```{r stacked-bar}
+# Classify regulation direction as “Up” or “Down” based on AMR
+data <- data %>%
+  mutate(
+    regulation = case_when(
+      AMR > 1  ~ "Up",
+      AMR < 1  ~ "Down",
+      TRUE     ~ NA_character_
+    )
+  )
+
+# Count features by superclass, subclass, and regulation category
+df_counts <- data %>%
+  filter(!is.na(superclass), !is.na(subclass), !is.na(regulation)) %>%
+  group_by(superclass, subclass, regulation) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  mutate(
+    superclass_label = case_when(
+      superclass == "GP" ~ "Glycerophospholipids (GP)",
+      superclass == "GL" ~ "Glycerolipids (GL)",
+      superclass == "SP" ~ "Sphingolipids (SP)",
+      superclass == "Fatty Acyls" ~ "Fatty Acyls",
+      TRUE ~ superclass
+    )
+  )
+
+# Calculate total counts per subclass within each superclass label
+df_totals <- df_counts %>%
+  group_by(superclass, subclass, superclass_label) %>%
+  summarise(total = sum(count), .groups = "drop")
+
+# Theme for inner legend
+inner_legend <- theme(
+  legend.title         = element_blank(),
+  legend.position      = c(0.98, 0.98),
+  legend.justification = c("right", "top"),
+  legend.background    = element_rect(fill = alpha("white", 0.75), colour = NA),
+  legend.key.size      = unit(0.3, "cm"),
+  legend.text          = element_text(size = 8)
+)
+
+# Panel–generating function
+make_panel <- function(label, ylim_max) {
+  ggplot(
+    filter(df_counts, superclass_label == label),
+    aes(x = subclass, y = count, fill = regulation)
+  ) +
+    geom_col(position = "stack",
+             width    = 0.8,    
+             colour   = "black",
+             size     = 0.45) + 
+    geom_text(
+      data = filter(df_totals, superclass_label == label),
+      aes(x = subclass, y = total, label = total),
+      inherit.aes = FALSE, vjust = -0.3, size = 3.5
+    ) +
+    scale_y_continuous(limits = c(0, ylim_max)) +
+    scale_fill_manual(values = c(Up = "red", Down = "blue")) +
+    labs(x = NULL, y = "Counts", title = label) +
+    theme_bw(base_size = 11) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 9, face  = "bold"),
+      axis.text.y = element_text(size = 9, face = "bold"),
+      plot.title  = element_text(face = "bold", size = 10)
+    ) +
+    inner_legend
+}
+
+# Create the four panels
+p1 <- make_panel("Glycerophospholipids (GP)", 40)
+p2 <- make_panel("Glycerolipids (GL)", 20)
+p3 <- make_panel("Sphingolipids (SP)", 20)
+p4 <- make_panel("Fatty Acyls", 10)
+
+# Relative widths based on number of bars
+n_barras = c(8, 3, 2, 2)  
+
+# Combine panels and save figure p1 | p2 | p3 | p4
+g <- (p1 | p2 | p3 | p4) +
+     plot_layout(widths = n_barras)
+
+ggsave(
+  filename = "lipids_1year_stacked_bar.png",
+  plot     = g,
+  width    = 11,
+  height   = 2.5,
+  dpi      = 300
+)
+```

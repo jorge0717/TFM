@@ -1,0 +1,164 @@
+---
+title: "Longitudinal Metabolomics Analysis"
+author: "Jorge"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+### Install required packages
+```{r install-packages, eval=FALSE}
+# Run this chunk once to install any missing packages
+required_pkgs <- c("Matrix", "lme4", "readxl", "openxlsx",
+                   "stats", "dplyr")
+new_pkgs <- required_pkgs[!(required_pkgs %in% installed.packages()[,"Package"])]
+if (length(new_pkgs)) install.packages(new_pkgs)
+```
+
+
+### Load libraries
+```{r load-libraries}
+library(Matrix)
+library(lme4)
+library(readxl)
+library(openxlsx)
+library(stats)
+library(dplyr)
+```
+
+
+### Load raw data (example: LC‑MS+ sheet)
+```{r load-data}
+data <- read_excel("BBDD.xlsx", sheet = "LC-MS+")
+data <- as.data.frame(data)
+
+dims <- dim(data)
+
+# Clinical variables occupy columns 1–41; metabolites start at column 42
+
+for (i in 42:dims) {
+  data[, i] <- as.numeric(data[, i])
+}
+```
+
+
+### Replace zeros (add a small constant)
+```{r add-constant}
+# Add 0.1 to every metabolite intensity to avoid zeros before log‑transformation
+
+for (i in 42:dims) {
+  data[,i]<- data[,i] + 0.1
+}
+```
+
+
+### Outlier winsorisation by visit
+```{r winsorise}
+metabolite_cols <- names(data)[42:dims]
+
+data <- data |>
+  group_by(Visita) |>                   
+  mutate(across(all_of(metabolite_cols),
+                ~ {
+                  q <- quantile(.x, probs = c(.25, .75), na.rm = TRUE)
+                  iqr <- q[2] - q[1]
+                  pmax(pmin(.x, q[2] + 1.5 * iqr), q[1] - 1.5 * iqr)
+                })) |>
+  ungroup()
+
+data <- as.data.frame(data)
+```
+
+
+### Remove metabolites with VIP < 1
+```{r remove-vip}
+vip_df <- read_excel("VIPmenor1 LC+.xlsx", sheet = "Hoja1")
+data <- select(data, -all_of(colnames(vip_df)))
+
+dims <- dim(datos)[2]
+```
+
+
+### Sex‑stratified analyses
+```{r sex-strata}
+# Uncomment ONE line to restrict the analysis by sex
+
+#data <- subset(data, data$Gender_male==1) # Men only
+
+#data <- subset(data, data$Gender_male==0) # Women only
+```
+
+
+### GLMM – metabolite change between visits (LC‑MS)
+```{r glmm-lcms}
+data_log <- data
+
+# Log10-transform metabolite intensities 
+for (i in 42:dims) {
+  data_log[ , i] <- log10(data_log[ , i])
+}
+
+# Fit a Gamma GLMM with identity link for each metabolite
+AMR1 <- NULL
+for (i in 42:dims) {
+  fm <- glmer(data_log[ , i] ~ Visita + (1 | ID_paciente),
+              family = Gamma(link = "identity"),
+              nAGQ   = 25,
+              data   = data_log)
+
+  # Arithmetic Mean Ratio (one‑year vs baseline)
+  AMR    <- 10 ^ (summary(fm)$coef[2, 1])
+  CI2.5  <- 10 ^ (confint(fm, parm = "beta_", method = "Wald")[2, 1])
+  CI97.5 <- 10 ^ (confint(fm, parm = "beta_", method = "Wald")[2, 2])
+  pval   <- summary(fm)$coef[2, 4]
+
+  AMR1 <- rbind(AMR1, c(AMR, CI2.5, CI97.5, pval))
+}
+
+
+features <- colnames (data_log) [42:dims]
+results_lcms <- cbind (features, AMR1)
+qval <- p.adjust(results_lcms[,5], method = "BH")
+results_lcms <- cbind (results_lcms, qval)
+```
+
+
+### GLMM – Metabolite change between visits (CE‑MS)
+```{r glmm-cems}
+# Fit a Gamma GLMM with log link for each metabolite
+AMR1 <- NULL
+for (i in 42:dims) {
+  fm <- glmer(data[ , i] ~ Visita + (1 | ID_paciente),
+              family = Gamma(link = "identity"),
+              nAGQ   = 25,
+              data   = data)
+
+  # Arithmetic Mean Ratio (one‑year vs baseline)
+  AMR    <- exp(summary(fm)$coef[2, 1])
+  CI2.5  <- exp(confint(fm, parm = "beta_", method = "Wald")[2, 1])
+  CI97.5 <- exp(confint(fm, parm = "beta_", method = "Wald")[2, 2])
+  pval   <- summary(fm)$coef[2, 4]
+
+  AMR1 <- rbind(AMR1, c(AMR, CI2.5, CI97.5, pval))
+}
+
+features <- colnames (data) [42:dims]
+results_cems <- cbind (features, AMR1)
+qval <- p.adjust(results_cems[,5], method = "BH")
+results_cems <- cbind (results_cems, qval)
+```
+
+
+### Export data to Excel
+```{r export-table, eval=FALSE}
+# Convert the character matrix to a data frame so openxlsx can write it cleanly
+results_lcms <- as.data.frame(results_lcms, stringsAsFactors = FALSE)
+
+write.xlsx(
+  x         = results_lcms,
+  file      = "Metabolite_GLMM_Results.xlsx",
+  overwrite = TRUE,
+  rowNames  = TRUE,
+  sheetName = "LC-MS+"
+)
+```
