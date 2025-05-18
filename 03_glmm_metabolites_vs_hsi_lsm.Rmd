@@ -131,7 +131,7 @@ for (i in 42:dims) {
 features <- colnames (data_log) [42:dims]
 results_lcms <- cbind (features, AMR1)
 qval <- p.adjust(results_lcms[,5], method = "BH")
-results_lcms <- cbind (results_lcms, qval)
+results_lcms <- cbind (results_lcms, qval) 
 ```
 
 
