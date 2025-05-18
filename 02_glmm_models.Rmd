@@ -129,7 +129,7 @@ results_lcms <- cbind (results_lcms, qval)
 AMR1 <- NULL
 for (i in 42:dims) {
   fm <- glmer(data[ , i] ~ Visita + (1 | ID_paciente),
-              family = Gamma(link = "identity"),
+              family = Gamma(link = "log"),
               nAGQ   = 25,
               data   = data)
 
