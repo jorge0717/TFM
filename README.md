@@ -1,5 +1,5 @@
 # TFM
-This repository contains the analysis code and rendered reports used in my Master’s Thesis (TFM). 
+This repository contains the analysis code used in my Master’s Thesis (TFM). 
 
 > **“Metabolomic Analysis in HIV/HCV Coinfected Patients: Impact of HCV Eradication and Gender Differences”**
 
